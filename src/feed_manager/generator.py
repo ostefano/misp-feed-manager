@@ -1,47 +1,76 @@
 import abc
-import collections
-
-import uuid
-import pymisp
-import hashlib
-import os
-import json
 import datetime
+import hashlib
+import json
 import logging
+import os
 
 from typing import Dict
+from typing import List
 from typing import Optional
 from typing import Tuple
+from typing import Union
+
+import feed_manager
+from feed_manager import translator
+
+try:
+    import pymisp
+except ImportError as ie:
+    pymisp = None
+    feed_manager.print_dependency_error_and_raise(ie)
 
 
-FeedProperties = collections.namedtuple("FeedProperties", [
-    "tag",
-    "analysis",
-    "threat_level_id",
-    "published",
-    "organization_name",
-    "organization_uuid",
-])
+class FeedProperties:
+    """Class to represent the properties of a feed."""
+
+    DEFAULT_ORG_ID = "676767"
+    DEFAULT_ORG_NAME = "Organization"
+    DEFAULT_ORG_UUID = "a6b0e426-8c54-4136-beb6-3c2bafac7c4b"
+    DEFAULT_FEED_NAME = "Feed"
+
+    @classmethod
+    def create_organization(
+        cls,
+        org_id: str = DEFAULT_ORG_ID,
+        name: str = DEFAULT_ORG_NAME,
+        uuid: str = DEFAULT_ORG_UUID,
+    ) -> pymisp.MISPOrganisation:
+        organization = pymisp.MISPOrganisation()
+        organization.from_dict(
+            id=org_id,
+            name=name,
+            uuid=uuid,
+        )
+        return organization
+
+    def __init__(
+        self,
+        analysis: str = "0",
+        threat_level_id: str = "1",
+        title: str = DEFAULT_FEED_NAME,
+        published: bool = False,
+        tags: Optional[List[Union[pymisp.MISPTag, str]]] = None,
+        organization: Optional[pymisp.MISPOrganisation] = None,
+    ):
+        if not organization:
+            organization = self.create_organization()
+        if not tags:
+            tags = []
+        self.organization = organization
+        self.analysis = analysis
+        self.tags = [translator.TagUtils.validate_tag(x) for x in tags]
+        self.threat_level_id = threat_level_id
+        self.published = published
+        self.title = title
 
 
 class AbstractFeedGenerator(abc.ABC):
     """Abstract class for every feed generators."""
 
-    DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
+    DATE_FMT = "%Y-%m-%d"
 
-    DEFAULT_FEED_PROPERTIES = FeedProperties(
-        tag=[
-            {
-                "colour": "#ffffff",
-                "name": "tlp:white"
-            },
-        ],
-        analysis=0,
-        threat_level_id=1,
-        published=False,
-        organization_name="Default organization",
-        organization_uuid=str(uuid.uuid4()),
-    )
+    DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
     def __init__(self, output_dir):
         """Constructor."""
@@ -58,6 +87,11 @@ class AbstractFeedGenerator(abc.ABC):
             attr1.value == attr2.value and
             attr1.data == attr2.data
         )
+
+    @staticmethod
+    def tag_equals(tag1: pymisp.MISPTag, tag2: pymisp.MISPTag) -> bool:
+        """Return whether two tags are the same."""
+        return tag1.name == tag2.name
 
     @classmethod
     def object_equals(cls, obj1: pymisp.MISPObject, obj2: pymisp.MISPObject) -> bool:
@@ -99,9 +133,20 @@ class AbstractFeedGenerator(abc.ABC):
                 return True
         return False
 
+    @classmethod
+    def contains_tag(cls, misp_event: pymisp.MISPEvent, misp_tag: pymisp.MISPTag) -> bool:
+        for tag in misp_event.tags:
+            if cls.tag_equals(tag, misp_tag):
+                return True
+        return False
+
     @abc.abstractmethod
     def add_object_to_event(self, misp_object: pymisp.MISPObject) -> bool:
         """Add object to the current event."""
+
+    @abc.abstractmethod
+    def add_tag_to_event(self, misp_tag: pymisp.MISPTag) -> bool:
+        """Add tag to the current event."""
 
     @abc.abstractmethod
     def add_attribute_to_event(self, attr_type: str, attr_value: str, **attr_data) -> bool:
@@ -135,7 +180,7 @@ class AbstractFeedGenerator(abc.ABC):
     def _add_hash(self, event: pymisp.MISPEvent, attr_type: str, attr_value: str) -> None:
         """Take the attribute properties and add a hash."""
         _ = attr_type
-        for frag in attr_value.split("|"):
+        for frag in str(attr_value).split("|"):
             frag_hash = hashlib.md5(str(frag).encode("utf-8"), usedforsecurity=False).hexdigest()
             self._attribute_hashes.append([frag_hash, event.get("uuid")])
 
@@ -159,7 +204,10 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
     @classmethod
     def get_bucket_from_date_str(cls, event_date_str: str) -> str:
         """Get the bucket from the given date string."""
-        date_obj = datetime.datetime.strptime(event_date_str, cls.DATETIME_FMT)
+        try:
+            date_obj = datetime.datetime.strptime(event_date_str, cls.DATETIME_FMT)
+        except ValueError:
+            date_obj = datetime.datetime.strptime(event_date_str, cls.DATE_FMT)
         return cls.get_bucket(date_obj)
 
     @classmethod
@@ -170,13 +218,11 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
     def __init__(
         self,
         output_dir: str,
-        feed_title: str,
         feed_properties: Optional[FeedProperties] = None,
     ):
         """Constructor."""
         super(PeriodicFeedGenerator, self).__init__(output_dir)
-        self._feed_properties = feed_properties or self.DEFAULT_FEED_PROPERTIES
-        self._feed_title = feed_title
+        self._feed_properties = feed_properties or FeedProperties()
         try:
             self._manifest = self._load_manifest()
         except FileNotFoundError:
@@ -209,6 +255,14 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
             return False
         self._current_event.add_attribute(attr_type, attr_value, **attr_data)
         self._add_hash(self._current_event, attr_type, attr_value)
+        return True
+
+    def add_tag_to_event(self, misp_tag: pymisp.MISPTag) -> bool:
+        """Implement interface."""
+        self._update_event_bucket()
+        if self.contains_tag(self._current_event, misp_tag):
+            return False
+        self._current_event.add_tag(misp_tag)
         return True
 
     def flush_event(self, event: Optional[pymisp.MISPEvent] = None) -> None:
@@ -254,23 +308,23 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
         """Create an even in the given bucket."""
         event = pymisp.MISPEvent()
         event.from_dict(**{
-            'id': len(self._manifest) + 1,
-            'info': f"{self._feed_title} ({event_bucket})",
-            'date': datetime.datetime.utcnow().strftime(self.DATETIME_FMT),
+            "id": str(len(self._manifest) + 1),
+            "info": f"{self._feed_properties.title} ({event_bucket})",
+            "date": datetime.datetime.utcnow().strftime(self.DATETIME_FMT),
             "analysis": self._feed_properties.analysis,
             "threat_level_id": self._feed_properties.threat_level_id,
             "published": self._feed_properties.published,
-            "Tag": self._feed_properties.tag,
         })
-        org = pymisp.MISPOrganisation()
-        org.name = self._feed_properties.organization_name
-        org.uuid = self._feed_properties.organization_uuid
-        event.Orgc = org
+        for tag in self._feed_properties.tags:
+            event.add_tag(tag)
+        event.Orgc = self._feed_properties.organization
         return event
 
 
 class DailyFeedGenerator(PeriodicFeedGenerator):
     """A feed generator that creates a different event every day."""
+
+    BUCKET_FMT = "%Y-%m-%d"
 
     @classmethod
     def get_bucket(cls, date_obj: datetime.datetime) -> str:
@@ -280,4 +334,4 @@ class DailyFeedGenerator(PeriodicFeedGenerator):
             minute=0,
             second=0,
             microsecond=0,
-        ).strftime(cls.DATETIME_FMT)
+        ).strftime(cls.BUCKET_FMT)

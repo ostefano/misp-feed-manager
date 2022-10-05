@@ -2,16 +2,106 @@
 
 Utilities and classes to generate and consume MISP feeds.
 
-```bash
-./bin/generate_feed.py 
-> a72dd6c2-1be0-48c1-8da6-36ebb5893f85
-> a72dd6c2-1be0-48c1-8da6-36ebb5893f85
-> a72dd6c2-1be0-48c1-8da6-36ebb5893f85
-> a72dd6c2-1be0-48c1-8da6-36ebb5893f85
-```
+We support two types of feeds:
+1) Indicators feeds: made of simple objects, like hashes, domains, etc; this is the basic feed type
+we use to share labelled indicators.
+2) Telemetry feeds: made of complex objects coming from our telemetry; each item has multiple
+indicators associated (for example md5 and sha1) and can contain complex objects (for example
+the list of behaviors associated to a sandbox analysis).
+
+Below we give an example of both. The `generate_feed.py` provides an example of how both feeds
+can be generated:
 
 ```bash
-./bin/consume_feed.py
-> Fetching indicators since 2022-07-30 14:25:18.856521
-> {'timestamp': '2022-09-20 15:08:34', 'event_uuid': '267821c4-ef6f-4303-9e6a-1fb0461a0577', 'object_uuid': '15f7f63e-6b94-4436-9e8d-3c5e829b2eea', 'attribute_uuid': 'ed8c57dc-a8b4-4a08-8b98-8f9acc544d75', 'indicator': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'tags': ['misp-galaxy:malpedia="GootKit"', 'misp-galaxy:threat-actor="Sofacy"']}
+./bin/generate_feed.py -o ./tmp/
+> Daily feed of indicators written to: ./tmp/indicators
+> Daily feed of telemetry objects written to: ./tmp/telemetry
+```
+
+Consuming an indicator feed extracts all attributes and print them as separate entities; note that
+it is still possible to group them by object (file) as the object uuid is not discarded and included
+in the provided output; this is useful because, for example, many hashes might describe the same
+file.
+
+```bash
+./bin/consume_feed.py -i ./tmp/indicators
+> Fetching items since 2022-08-20 13:19:04.856733
+> {
+>  "tags": [
+>   "misp-galaxy:malpedia=\"GootKit\"",
+>   "misp-galaxy:threat-actor=\"Sofacy\""
+>  ],
+>  "timestamp": "2022-10-11 14:01:56",
+>  "event_uuid": "ca324c99-a9d2-45e0-947d-d864d70df9c5",
+>  "object_uuid": "31ae2789-392e-40a7-971b-d80ee8f78fca",
+>  "attribute_uuid": "0bd619cc-4692-4c5e-84fd-c45fcd0e0d93",
+>  "attribute_type": "md5",
+>  "attribute_value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+> }
+> {
+>  "tags": [
+>   "misp-galaxy:malpedia=\"GootKit\"",
+>   "misp-galaxy:threat-actor=\"Sofacy\""
+>  ],
+>  "timestamp": "2022-10-11 14:01:56",
+>  "event_uuid": "ca324c99-a9d2-45e0-947d-d864d70df9c5",
+>  "object_uuid": "31ae2789-392e-40a7-971b-d80ee8f78fca",
+>  "attribute_uuid": "6c6578a9-fd33-4ae9-8443-2bdb0435aa9f",
+>  "attribute_type": "sha1",
+>  "attribute_value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+> }
+> {
+>  "tags": [
+>   "misp-galaxy:malpedia=\"GootKit\"",
+>   "misp-galaxy:threat-actor=\"Sofacy\""
+>  ],
+>  "timestamp": "2022-10-11 14:01:56",
+>  "event_uuid": "ca324c99-a9d2-45e0-947d-d864d70df9c5",
+>  "object_uuid": "31ae2789-392e-40a7-971b-d80ee8f78fca",
+>  "attribute_uuid": "6929d4ca-3b14-4d7b-a021-f3442b0eca01",
+>  "attribute_type": "sha256",
+>  "attribute_value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+> }
+```
+
+Instead of further filtering and processing, it is also possible to request the attribute type
+at consumption time. For example, when processing the same feed we can do the following:
+
+```bash
+./bin/consume_feed.py -i ./tmp/indicators -t sha1
+> Fetching items since 2022-08-20 13:23:48.005220
+> {
+>  "tags": [
+>   "misp-galaxy:malpedia=\"GootKit\"",
+>   "misp-galaxy:threat-actor=\"Sofacy\""
+>  ],
+>  "timestamp": "2022-10-11 14:01:56",
+>  "event_uuid": "ca324c99-a9d2-45e0-947d-d864d70df9c5",
+>  "object_uuid": "31ae2789-392e-40a7-971b-d80ee8f78fca",
+>  "attribute_uuid": "6c6578a9-fd33-4ae9-8443-2bdb0435aa9f",
+>  "attribute_type": "sha1",
+>  "attribute_value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+> }
+```
+
+And finally, an example of consuming a telemetry feed:
+```bash
+./bin/consume_feed.py -i ./tmp/telemetry/
+> Fetching items since 2022-08-20 13:12:12.802821
+> {
+>  "tags": [],
+>  "techniques": [],
+>  "task.portal_url": "https://user.lastline.com/portal#/analyst/task/30f48c17e9db002005baa7d440ca275a/overview",
+>  "task.score": "70",
+>  "analysis.activities": [
+>   "Anomaly: AI detected possible malicious code reuse",
+>   "Evasion: Detecting the presence of AntiMalware Scan Interface (AMSI)",
+>   "Execution: Subject crash detected",
+>   "Signature: Potentially malicious application/program"
+>  ],
+>  "file.md5": "37840d4e937db0385b820d4019071540",
+>  "file.sha1": "a1f7670cd7da7e331db2d69f0855858985819873",
+>  "file.sha256": "492bfe8d2b1105ec4045f96913d38f98e30fe349ea50cc4aaa425ca289af2852",
+>  "file.name": "unknown"
+> }
 ```

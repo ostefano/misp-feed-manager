@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import datetime
+import json
 import pathlib
 import sys
-
 
 from feed_manager import consumer
 
@@ -16,16 +16,17 @@ def main():
         "--input-dir",
         dest="input_dir",
         type=str,
-        default="./tmp/",
+        default=None,
+        required=True,
         help="the local feed",
     )
     parser.add_argument(
         "-t",
-        "--indicator-type",
-        dest="indicator_type",
+        "--attribute-type",
+        dest="attribute_type",
         type=str,
-        default="sha1",
-        help="the indicator type",
+        default=None,
+        help="the attribute type",
     )
     parser.add_argument(
         "-d",
@@ -40,13 +41,14 @@ def main():
     pathlib.Path(args.input_dir).mkdir(parents=True, exist_ok=True)
     since_date_object = datetime.datetime.utcnow() - datetime.timedelta(days=args.day_delta)
     feed_consumer = consumer.LocalFeedConsumer(args.input_dir)
-    indicators = feed_consumer.get_indicators_since(
+    indicators = feed_consumer.get_items_since(
         date_object=since_date_object,
-        indicator_type=args.indicator_type,
+        attribute_type=args.attribute_type,
     )
-    print(f"Fetching indicators since {since_date_object}")
+
+    print(f"Fetching items since {since_date_object}")
     for indicator in indicators:
-        print(indicator)
+        print(json.dumps(indicator, indent=True))
     return 0
 
 
