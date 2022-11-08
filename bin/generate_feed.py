@@ -92,7 +92,7 @@ def main():
     pathlib.Path(telemetry_path).mkdir(parents=True, exist_ok=True)
     misp_objects = translator.IndicatorTranslator.from_contexa_to_objects(
         item=TELEMETRY_ITEM,
-        mitre_attack_galaxy_cluster=None,
+        mitre_attack_technique_id_to_tag=None,
         include_sandbox_result=True,
         include_sandbox_activities=True,
     )

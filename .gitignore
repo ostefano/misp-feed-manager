@@ -1,2 +1,5 @@
 src/feed_manager/__pycache__
 tmp
+.tox
+src/misp_feed_manager.egg-info
+tests/__pycache__

@@ -5,6 +5,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Tuple
 from typing import Union
 
 
@@ -21,7 +22,48 @@ class TagUtils:
     OBJECT_NAME_TO_ATTRIBUTE_TAG = {
         "file": "filename",
         "network-profile": "text",
+        "sandbox-report": "score",
+        "atp-report": "score",
     }
+
+    @classmethod
+    def __workaround_bug(cls, object_attribute: pymisp.MISPAttribute) -> pymisp.MISPAttribute:
+        """Workaround the current pymisp bug where object attributes have mis-initialized tags."""
+        if object_attribute.tags:
+            return object_attribute
+        if not hasattr(object_attribute, "AttributeTag"):
+            return object_attribute
+        tags = []
+        try:
+            for attribute_tag in object_attribute.AttributeTag:
+                tag = attribute_tag["Tag"]
+                tag_object = pymisp.MISPTag()
+                tag_object.from_dict(**tag)
+                tags.append(tag_object)
+        except KeyError:
+            pass
+        object_attribute.tags = tags
+        return object_attribute
+
+    @classmethod
+    def get_taggable_entity(
+        cls,
+        entity: Union[pymisp.MISPEvent, pymisp.MISPObject, pymisp.MISPAttribute],
+    ) -> Union[pymisp.MISPEvent, pymisp.MISPAttribute]:
+        """Get the taggable entity."""
+        if isinstance(entity, pymisp.MISPEvent):
+            return entity
+        elif isinstance(entity, pymisp.MISPAttribute):
+            return entity
+        else:
+            try:
+                attribute_type = cls.OBJECT_NAME_TO_ATTRIBUTE_TAG[entity.name]
+            except KeyError:
+                raise ValueError(f"Can not process object '{entity.name}/{entity.uuid}'")
+            try:
+                return cls.__workaround_bug(entity.get_attributes_by_relation(attribute_type)[0])
+            except IndexError:
+                raise ValueError(f"Object '{entity.name}/{entity.uuid}' seems malformed'")
 
     @classmethod
     def validate_tag(cls, input_object: Union[pymisp.MISPTag, str]) -> pymisp.MISPTag:
@@ -35,20 +77,16 @@ class TagUtils:
     def create_tag(cls, name: str, colour: Optional[str] = None) -> pymisp.MISPTag:
         """Create a tag."""
         tag = pymisp.MISPTag()
-        tag.from_dict(**{
-            "name": name,
-            "colour": colour,
-        })
+        tag.from_dict(
+            name=name,
+            colour=colour,
+        )
         return tag
 
     @classmethod
     def add_tag_to_object(cls, obj: pymisp.MISPObject, tag: Union[str, pymisp.MISPTag]):
         """Add a tag to an object by choosing a representative attribute."""
-        try:
-            attribute_type = cls.OBJECT_NAME_TO_ATTRIBUTE_TAG[obj.name]
-        except KeyError:
-            raise ValueError(f"Can not process object '{obj.name}'")
-        attribute = obj.get_attributes_by_relation(attribute_type)[0]
+        attribute = cls.get_taggable_entity(obj)
         cls.add_tag_to_attribute(attribute, tag)
 
     @classmethod
@@ -56,6 +94,47 @@ class TagUtils:
         """Add a tag to an attribute."""
         tag = cls.validate_tag(tag)
         attribute.add_tag(tag)
+
+    @classmethod
+    def entity_contains_tag(
+        cls,
+        entity: Union[pymisp.MISPEvent, pymisp.MISPObject, pymisp.MISPAttribute],
+        tag_name: str,
+    ) -> bool:
+        """Whether an entity is tagged with a given tag."""
+        if isinstance(entity, pymisp.MISPObject):
+            entity = cls.get_taggable_entity(entity)
+        for tag in entity.tags:
+            if tag.name == tag_name:
+                return True
+        return False
+
+    @classmethod
+    def decode_cluster_tag(
+        cls,
+        tag: Union[str, pymisp.MISPTag],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Decode a cluster tag."""
+        if isinstance(tag, pymisp.MISPTag):
+            tag = tag.name
+        try:
+            category, value = tag.split("=")
+            return category, value.strip("\"")
+        except (KeyError, IndexError):
+            return None, None
+
+    @classmethod
+    def get_cluster_tag_value(
+        cls,
+        tag: Union[str, pymisp.MISPTag],
+        category: str = None,
+    ) -> Optional[str]:
+        """Get the value of a cluster tag."""
+        cat, value = cls.decode_cluster_tag(tag)
+        if category:
+            return value if cat.startswith(category) else None
+        else:
+            return value
 
 
 class IndicatorTranslator:
@@ -93,34 +172,6 @@ class IndicatorTranslator:
         return net_attribute
 
     @classmethod
-    def to_network_object(
-        cls,
-        domain: Optional[str] = None,
-        url: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        whois_entry: str = DEFAULT_WHOIS_ENTRY,
-        tags: Optional[List[Union[str, pymisp.MISPTag]]] = None,
-    ) -> pymisp.MISPObject:
-        """Get a network indicator as object when multiple indicators are available."""
-        if not domain and not url and not ip_address:
-            raise ValueError("Invalid network object with no domain url or ip")
-        network_obj = pymisp.MISPObject("network-profile")
-        network_obj.add_attribute(
-            "text",
-            value=whois_entry,
-            comment="tags assigned to this attribute apply to the whole object",
-        )
-        if domain:
-            network_obj.add_attribute("domain", domain)
-        if url:
-            network_obj.add_attribute("url", url)
-        if ip_address:
-            network_obj.add_attribute("ip-address", ip_address)
-        for tag in tags or []:
-            TagUtils.add_tag_to_object(network_obj, tag)
-        return network_obj
-
-    @classmethod
     def to_file_attribute(
         cls,
         file_hash,
@@ -150,6 +201,7 @@ class IndicatorTranslator:
         file_name: Optional[str] = None,
         size: Optional[int] = None,
         mime_type: Optional[str] = None,
+        comment: Optional[str] = None,
         attribute_category: str = DEFAULT_FILE_ATTRIBUTE_CATEGORY,
         tags: Optional[List[Union[str, pymisp.MISPTag]]] = None,
     ) -> pymisp.MISPObject:
@@ -158,7 +210,7 @@ class IndicatorTranslator:
         file_object.add_attribute(
             "filename",
             value=file_name or cls.DEFAULT_FILE_NAME,
-            comment="tags assigned to this attribute apply to the whole object",
+            comment=comment,
         )
         if file_md5:
             file_object.add_attribute(
@@ -196,7 +248,7 @@ class IndicatorTranslator:
     def from_contexa_to_objects(
         cls,
         item: Dict[str, Any],
-        mitre_attack_galaxy_cluster: Optional[Dict] = None,
+        mitre_attack_technique_id_to_tag: Optional[Dict] = None,
         include_sandbox_result: bool = True,
         include_sandbox_activities: bool = True,
         tags: Optional[List[Union[str, pymisp.MISPTag]]] = None,
@@ -236,15 +288,11 @@ class IndicatorTranslator:
             objects.append(sig_object)
 
         technique_tags = []
-        if mitre_attack_galaxy_cluster:
-            id_to_tag = {
-                x["meta"]["external_id"]: x["tag_name"]
-                for x in mitre_attack_galaxy_cluster["values"]
-            }
+        if mitre_attack_technique_id_to_tag:
             for technique in item["analysis.mitre_techniques"]:
                 technique_id = technique.split(":")[0]
-                if technique_id in id_to_tag:
-                    technique_tags.append(id_to_tag[technique_id])
+                if technique_id in mitre_attack_technique_id_to_tag:
+                    technique_tags.append(mitre_attack_technique_id_to_tag[technique_id])
 
         contexa_tags = []
         for tag_name, tag_value in zip(item["research.tag.name"], item["research.tag.value"]):
