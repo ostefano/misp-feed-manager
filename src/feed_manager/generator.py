@@ -24,7 +24,6 @@ except ImportError as ie:
 class FeedProperties:
     """Class to represent the properties of a feed."""
 
-    DEFAULT_ORG_ID = "676767"
     DEFAULT_ORG_NAME = "Organization"
     DEFAULT_ORG_UUID = "a6b0e426-8c54-4136-beb6-3c2bafac7c4b"
     DEFAULT_FEED_NAME = "Feed"
@@ -32,13 +31,11 @@ class FeedProperties:
     @classmethod
     def create_organization(
         cls,
-        org_id: str = DEFAULT_ORG_ID,
         name: str = DEFAULT_ORG_NAME,
         uuid: str = DEFAULT_ORG_UUID,
     ) -> pymisp.MISPOrganisation:
         organization = pymisp.MISPOrganisation()
         organization.from_dict(
-            id=org_id,
             name=name,
             uuid=uuid,
         )

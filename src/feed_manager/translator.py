@@ -259,9 +259,9 @@ class IndicatorTranslator:
             file_md5=item["file.md5"],
             file_sha1=item["file.sha1"],
             file_sha256=item["file.sha256"],
-            file_name=item["file.name"],
-            mime_type=item["file.mime_type"],
-            size=item["file.size"],
+            file_name=item.get("file.name"),
+            mime_type=item.get("file.mime_type"),
+            size=item.get("file.size"),
         )
         objects.append(file_object)
 
@@ -277,7 +277,7 @@ class IndicatorTranslator:
             )
             objects.append(sandbox_object)
 
-        if sandbox_object and include_sandbox_activities and item["analysis.activities"]:
+        if sandbox_object and include_sandbox_activities and item.get("analysis.activities"):
             sig_object = pymisp.MISPObject(name="sb-signature")
             for activity in item["analysis.activities"]:
                 sig_object.add_attribute("signature", type="text", value=activity)
@@ -289,13 +289,16 @@ class IndicatorTranslator:
 
         technique_tags = []
         if mitre_attack_technique_id_to_tag:
-            for technique in item["analysis.mitre_techniques"]:
+            for technique in item.get("analysis.mitre_techniques", []):
                 technique_id = technique.split(":")[0]
                 if technique_id in mitre_attack_technique_id_to_tag:
                     technique_tags.append(mitre_attack_technique_id_to_tag[technique_id])
 
         contexa_tags = []
-        for tag_name, tag_value in zip(item["research.tag.name"], item["research.tag.value"]):
+        for tag_name, tag_value in zip(
+            item.get("research.tag.name", []),
+            item.get("research.tag.value", []),
+        ):
             contexa_tags.append(f"contexa:{tag_name}={tag_value}")
 
         for tag in itertools.chain(tags or [], technique_tags, contexa_tags):
