@@ -18,7 +18,7 @@ def main():
         type=str,
         default=None,
         required=True,
-        help="the local feed",
+        help="location of the local feed",
     )
     parser.add_argument(
         "-t",
@@ -26,7 +26,15 @@ def main():
         dest="attribute_type",
         type=str,
         default=None,
-        help="the attribute type",
+        help="the attribute type (e.g., sha1)",
+    )
+    parser.add_argument(
+        "-g",
+        "--galaxy-name",
+        dest="galaxy_name",
+        type=str,
+        default=None,
+        help="filter by MISP galaxy (e.g., malpedia)",
     )
     parser.add_argument(
         "-d",
@@ -44,6 +52,7 @@ def main():
     indicators = feed_consumer.get_items_since(
         date_object=since_date_object,
         attribute_type=args.attribute_type,
+        galaxy_name=args.galaxy_name,
     )
 
     print(f"Fetching items since {since_date_object}")

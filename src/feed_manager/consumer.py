@@ -248,10 +248,35 @@ class AbstractFeedConsumer(abc.ABC):
         event_uuids = self._get_event_uuids_since(date_object.timestamp())
         return [self.load_event(x) for x in event_uuids]
 
+    @classmethod
+    def _get_tag_galaxy(cls, tag_name: str) -> Optional[str]:
+        """Get the galaxy if the tag is a MISP galaxy cluster."""
+        try:
+            category = tag_name.split("=")[0]
+            tag_class, tag_galaxy = category.split(":")
+            return tag_galaxy if tag_class == "misp-galaxy" else None
+        except (ValueError, IndexError):
+            return None
+
+    @classmethod
+    def _filter_indicator(
+        cls,
+        indicator: Dict[str, Any],
+        attribute_type: Optional[str] = None,
+        galaxy_name: Optional[str] = None,
+    ) -> bool:
+        """Return false if the indicator shall NOT be included."""
+        if attribute_type and indicator["attribute_type"] != attribute_type:
+            return False
+        if galaxy_name and all(cls._get_tag_galaxy(x) != galaxy_name for x in indicator["tags"]):
+            return False
+        return True
+
     def get_items_since(
         self,
         date_object: datetime.datetime,
         attribute_type: Optional[str] = None,
+        galaxy_name: Optional[str] = None,
     ) -> List[Dict]:
         """Return the items contained in the feed."""
         ret = []
@@ -259,7 +284,7 @@ class AbstractFeedConsumer(abc.ABC):
             parser_class = self._infer_parser_class(event_data)
             with parser_class(event_data) as parser:
                 for indicator in parser:
-                    if not attribute_type or indicator["attribute_type"] == attribute_type:
+                    if self._filter_indicator(indicator, attribute_type, galaxy_name):
                         ret.append(indicator)
         return ret
 
