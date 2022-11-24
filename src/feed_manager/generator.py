@@ -43,8 +43,8 @@ class FeedProperties:
 
     def __init__(
         self,
-        analysis: str = "0",
-        threat_level_id: str = "1",
+        analysis: pymisp.Analysis = pymisp.Analysis.initial,
+        threat_level_id: pymisp.ThreatLevel = pymisp.ThreatLevel.low,
         title: str = DEFAULT_FEED_NAME,
         published: bool = False,
         tags: Optional[List[Union[pymisp.MISPTag, str]]] = None,
@@ -97,10 +97,10 @@ class AbstractFeedGenerator(abc.ABC):
         obj2_attributes = sorted(obj2.attributes, key=lambda x: x.type)
         if len(obj1_attributes) != len(obj2_attributes):
             return False
-        for attr1, attr2 in zip(obj1_attributes, obj2_attributes):
-            if not cls.attribute_equals(attr1, attr2):
-                return False
-        return True
+        return all(
+            cls.attribute_equals(attr1, attr2)
+            for attr1, attr2 in zip(obj1_attributes, obj2_attributes)
+        )
 
     @classmethod
     def contains_attribute(
@@ -117,25 +117,16 @@ class AbstractFeedGenerator(abc.ABC):
             value=attr_value,
             data=attr_data,
         )
-        for attr in misp_event.attributes:
-            if cls.attribute_equals(fake_attribute, attr):
-                return True
-        return False
+        return any(cls.attribute_equals(fake_attribute, attr) for attr in misp_event.attributes)
 
     @classmethod
     def contains_object(cls, misp_event: pymisp.MISPEvent, misp_object: pymisp.MISPObject) -> bool:
         """Return whether the misp event contains a specific object."""
-        for obj in misp_event.objects:
-            if cls.object_equals(obj, misp_object):
-                return True
-        return False
+        return any(cls.object_equals(obj, misp_object) for obj in misp_event.objects)
 
     @classmethod
     def contains_tag(cls, misp_event: pymisp.MISPEvent, misp_tag: pymisp.MISPTag) -> bool:
-        for tag in misp_event.tags:
-            if cls.tag_equals(tag, misp_tag):
-                return True
-        return False
+        return any(cls.tag_equals(tag, misp_tag) for tag in misp_event.tags)
 
     @abc.abstractmethod
     def add_object_to_event(self, misp_object: pymisp.MISPObject) -> bool:
@@ -308,8 +299,8 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
             "id": str(len(self._manifest) + 1),
             "info": f"{self._feed_properties.title} ({event_bucket})",
             "date": datetime.datetime.utcnow().strftime(self.DATETIME_FMT),
-            "analysis": self._feed_properties.analysis,
-            "threat_level_id": self._feed_properties.threat_level_id,
+            "analysis": self._feed_properties.analysis.value,
+            "threat_level_id": self._feed_properties.threat_level_id.value,
             "published": self._feed_properties.published,
         })
         for tag in self._feed_properties.tags:

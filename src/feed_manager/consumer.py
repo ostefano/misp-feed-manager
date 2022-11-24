@@ -19,6 +19,8 @@ from typing import TypeVar
 class ObjectFactory:
     """Factory to decode complex objects from misp."""
 
+    TELEMETRY_OBJECT_NAMES = frozenset(["atp-report", "sandbox-report"])
+
     def __init__(self, event_data: Dict):
         """Constructor."""
         self._uuid_to_object = {x["uuid"]: x for x in event_data["Event"]["Object"]}
@@ -45,13 +47,18 @@ class ObjectFactory:
     def parse_sandbox_report(self, file_object: Dict) -> Dict:
         """Parse the sandbox report."""
         ret = {
+            "analysis.activities": [],
             "task.portal_url": [],
             "task.score": [],
-            "analysis.activities": [],
         }
-        try:
-            sandbox_report = self._get_referencing_objects(file_object, "sandbox-report")[0]
-        except IndexError:
+        sandbox_report = None
+        for object_name in self.TELEMETRY_OBJECT_NAMES:
+            try:
+                sandbox_report = self._get_referencing_objects(file_object, object_name)[0]
+                break
+            except IndexError:
+                pass
+        if not sandbox_report:
             return ret
         for attr in sandbox_report["Attribute"]:
             if attr["object_relation"] == "permalink":
@@ -72,7 +79,7 @@ class ObjectFactory:
         for object_tag in tags:
             tag_name, tag_value = object_tag.split("=")
             tag_value = tag_value.strip("\"")
-            if tag_name == "mitre-galaxy:mitre-attack-pattern":
+            if tag_name == "misp-galaxy:mitre-attack-pattern":
                 technique, technique_id = tag_value.split(" - ")
                 ret.append(f"{technique_id}: {technique}")
         return ret
@@ -231,7 +238,7 @@ class AbstractFeedConsumer(abc.ABC):
     def _infer_parser_class(cls, event_data: Dict) -> Type[BaseFeedParserSubType]:
         """Return the parser class able to read the feed."""
         for object_data in event_data["Event"]["Object"]:
-            if object_data["name"] == "sandbox-report":
+            if object_data["name"] in ObjectFactory.TELEMETRY_OBJECT_NAMES:
                 return TelemetryEventFeedParser
         return IndicatorEventFeedParser
 

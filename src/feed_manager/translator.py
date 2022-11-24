@@ -1,8 +1,5 @@
-import itertools
 import feed_manager
 
-from typing import Any
-from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Tuple
@@ -19,6 +16,7 @@ except ImportError as ie:
 class TagUtils:
     """Class with utility methods to handle tags."""
 
+    # map object name to the attribute used to store object tags
     OBJECT_NAME_TO_ATTRIBUTE_TAG = {
         "file": "filename",
         "network-profile": "text",
@@ -102,25 +100,30 @@ class TagUtils:
         tag_name: str,
     ) -> bool:
         """Whether an entity is tagged with a given tag."""
-        if isinstance(entity, pymisp.MISPObject):
-            entity = cls.get_taggable_entity(entity)
-        for tag in entity.tags:
-            if tag.name == tag_name:
-                return True
-        return False
+        entity = cls.get_taggable_entity(entity)
+        return any(tag.name == tag_name for tag in entity.tags)
+
+    @classmethod
+    def entity_contains_any_tags(
+        cls,
+        entity: Union[pymisp.MISPEvent, pymisp.MISPObject, pymisp.MISPAttribute],
+        tag_names: List[str],
+    ) -> bool:
+        """Whether an entity is tagged with any of the given tags."""
+        return any(cls.entity_contains_tag(entity, tag_name) for tag_name in tag_names)
 
     @classmethod
     def decode_cluster_tag(
         cls,
         tag: Union[str, pymisp.MISPTag],
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Decode a cluster tag."""
+        """Decode a galaxy cluster tag into category and value."""
         if isinstance(tag, pymisp.MISPTag):
             tag = tag.name
         try:
             category, value = tag.split("=")
             return category, value.strip("\"")
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, ValueError):
             return None, None
 
     @classmethod
@@ -129,12 +132,12 @@ class TagUtils:
         tag: Union[str, pymisp.MISPTag],
         category: str = None,
     ) -> Optional[str]:
-        """Get the value of a cluster tag."""
-        cat, value = cls.decode_cluster_tag(tag)
-        if category:
-            return value if cat.startswith(category) else None
+        """Get the value of a galaxy cluster tag optionally filtering by category."""
+        tag_category, tag_value = cls.decode_cluster_tag(tag)
+        if category and tag_category:
+            return tag_value if tag_category.startswith(category) else None
         else:
-            return value
+            return tag_value
 
 
 class IndicatorTranslator:
@@ -211,96 +214,41 @@ class IndicatorTranslator:
             "filename",
             value=file_name or cls.DEFAULT_FILE_NAME,
             comment=comment,
+            to_ids=False,
         )
         if file_md5:
             file_object.add_attribute(
                 "md5",
                 value=file_md5,
                 category=attribute_category,
+                to_ids=True,
             )
         if file_sha1:
             file_object.add_attribute(
                 "sha1",
                 value=file_sha1,
                 category=attribute_category,
+                to_ids=True,
             )
         if file_sha256:
             file_object.add_attribute(
                 "sha256",
                 value=file_sha256,
                 category=attribute_category,
+                to_ids=True,
             )
         if size:
             file_object.add_attribute(
                 "size-in-bytes",
                 value=size,
+                to_ids=False,
             )
         if mime_type:
             file_object.add_attribute(
                 "mimetype",
                 value=mime_type,
+                to_ids=False,
             )
         for tag in tags or []:
             TagUtils.add_tag_to_object(file_object, tag)
         return file_object
-
-    @classmethod
-    def from_contexa_to_objects(
-        cls,
-        item: Dict[str, Any],
-        mitre_attack_technique_id_to_tag: Optional[Dict] = None,
-        include_sandbox_result: bool = True,
-        include_sandbox_activities: bool = True,
-        tags: Optional[List[Union[str, pymisp.MISPTag]]] = None,
-    ):
-        """Convert a contexa telemetry item into objects."""
-        objects = []
-        file_object = cls.to_file_object(
-            file_md5=item["file.md5"],
-            file_sha1=item["file.sha1"],
-            file_sha256=item["file.sha256"],
-            file_name=item.get("file.name"),
-            mime_type=item.get("file.mime_type"),
-            size=item.get("file.size"),
-        )
-        objects.append(file_object)
-
-        sandbox_object = None
-        if include_sandbox_result:
-            sandbox_object = pymisp.MISPObject(name="sandbox-report")
-            sandbox_object.add_attribute("score", item["task.score"])
-            sandbox_object.add_attribute("saas-sandbox", "vmware-atp-sandbox")
-            sandbox_object.add_attribute("permalink", item["task.portal_url"])
-            sandbox_object.add_reference(
-                referenced_uuid=file_object.uuid,
-                relationship_type="belongs-to",
-            )
-            objects.append(sandbox_object)
-
-        if sandbox_object and include_sandbox_activities and item.get("analysis.activities"):
-            sig_object = pymisp.MISPObject(name="sb-signature")
-            for activity in item["analysis.activities"]:
-                sig_object.add_attribute("signature", type="text", value=activity)
-            sig_object.add_reference(
-                referenced_uuid=sandbox_object.uuid,
-                relationship_type="belongs-to",
-            )
-            objects.append(sig_object)
-
-        technique_tags = []
-        if mitre_attack_technique_id_to_tag:
-            for technique in item.get("analysis.mitre_techniques", []):
-                technique_id = technique.split(":")[0]
-                if technique_id in mitre_attack_technique_id_to_tag:
-                    technique_tags.append(mitre_attack_technique_id_to_tag[technique_id])
-
-        contexa_tags = []
-        for tag_name, tag_value in zip(
-            item.get("research.tag.name", []),
-            item.get("research.tag.value", []),
-        ):
-            contexa_tags.append(f"contexa:{tag_name}={tag_value}")
-
-        for tag in itertools.chain(tags or [], technique_tags, contexa_tags):
-            TagUtils.add_tag_to_object(file_object, tag)
-        return objects
