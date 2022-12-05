@@ -62,12 +62,16 @@ class FeedProperties:
         self.title = title
 
 
+class FeedGenerationException(Exception):
+    """Generic exception."""
+
+
+class FeedEventNotFound(FeedGenerationException):
+    """Exception raised when the feed has not the required event."""
+
+
 class AbstractFeedGenerator(abc.ABC):
     """Abstract class for every feed generators."""
-
-    DATE_FMT = "%Y-%m-%d"
-
-    DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 
     def __init__(self, output_dir):
         """Constructor."""
@@ -190,27 +194,30 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
         """Return the periodic bucket given the provided date object."""
 
     @classmethod
-    def get_bucket_from_date_str(cls, event_date_str: str) -> str:
-        """Get the bucket from the given date string."""
-        try:
-            date_obj = datetime.datetime.strptime(event_date_str, cls.DATETIME_FMT)
-        except ValueError:
-            date_obj = datetime.datetime.strptime(event_date_str, cls.DATE_FMT)
-        return cls.get_bucket(date_obj)
+    @abc.abstractmethod
+    def parse_bucket(cls, date_str: str) -> datetime.datetime:
+        """Given a bucket return the date time object."""
 
-    @classmethod
-    def get_current_bucket(cls) -> str:
+    def get_current_bucket(self) -> str:
         """Get the current bucket (truncated datetime object)."""
-        return cls.get_bucket(datetime.datetime.utcnow())
+        return self.get_bucket(self._event_date_callback())
 
     def __init__(
         self,
         output_dir: str,
         feed_properties: Optional[FeedProperties] = None,
+        date_override: Optional[datetime.datetime] = None,
     ):
         """Constructor."""
         super(PeriodicFeedGenerator, self).__init__(output_dir)
         self._feed_properties = feed_properties or FeedProperties()
+        # Set up the callback used to know the current date at which we are inserting items
+        if date_override:
+            self._event_date_callback = lambda: date_override
+        else:
+            self._event_date_callback = lambda: datetime.datetime.utcnow()
+
+        # Load the manifest but create it in case it is empty
         try:
             self._manifest = self._load_manifest()
         except FileNotFoundError:
@@ -222,8 +229,21 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
             self._manifest.update(new_event.manifest)
             self._save_manifest()
 
-        event_uuid, event_date_str = self._get_last_event_metadata()
-        self._current_event_bucket = self.get_bucket_from_date_str(event_date_str)
+        # Load the current event but load it if the existing manifest does not have it
+        if date_override:
+            self._logger.debug("Creating a feed with an overriden date: %s", date_override)
+            try:
+                event_uuid, event_date_str = self._get_event_metadata(date_override)
+            except FeedEventNotFound:
+                self._logger.debug("The overridden date does not have an event. Creating it...")
+                new_event = self._create_event(self.get_current_bucket())
+                self.flush_event(event=new_event)
+                self._manifest.update(new_event.manifest)
+                self._save_manifest()
+                event_uuid, event_date_str = self._get_event_metadata(date_override)
+        else:
+            event_uuid, event_date_str = self._get_last_event_metadata()
+        self._current_event_bucket = self.get_bucket(self.parse_bucket(event_date_str))
         self._current_event = self._load_event(event_uuid)
 
     def add_object_to_event(self, misp_object: pymisp.MISPObject) -> bool:
@@ -292,16 +312,28 @@ class PeriodicFeedGenerator(AbstractFeedGenerator, abc.ABC):
         dated_events.sort(key=lambda k: (k[0], k[2], k[1]), reverse=True)
         return dated_events[0][1], dated_events[0][0]
 
+    def _get_event_metadata(
+        self,
+        date_obj: datetime.datetime,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Get the metadata related to the event matching the date provided."""
+        date_str = self.get_bucket(date_obj)
+        for event_uuid, event_json in self._manifest.items():
+            if event_json["date"] == date_str:
+                return event_uuid, event_json["date"]
+        raise FeedEventNotFound
+
     def _create_event(self, event_bucket: str) -> pymisp.MISPEvent:
         """Create an even in the given bucket."""
         event = pymisp.MISPEvent()
         event.from_dict(**{
             "id": str(len(self._manifest) + 1),
             "info": f"{self._feed_properties.title} ({event_bucket})",
-            "date": datetime.datetime.utcnow().strftime(self.DATETIME_FMT),
+            "date": event_bucket,
             "analysis": self._feed_properties.analysis.value,
             "threat_level_id": self._feed_properties.threat_level_id.value,
             "published": self._feed_properties.published,
+            "timestamp": int(self.parse_bucket(event_bucket).timestamp()),
         })
         for tag in self._feed_properties.tags:
             event.add_tag(tag)
@@ -313,6 +345,11 @@ class DailyFeedGenerator(PeriodicFeedGenerator):
     """A feed generator that creates a different event every day."""
 
     BUCKET_FMT = "%Y-%m-%d"
+
+    @classmethod
+    def parse_bucket(cls, date_str: str) -> datetime.datetime:
+        """Implement interface"""
+        return datetime.datetime.strptime(date_str, cls.BUCKET_FMT)
 
     @classmethod
     def get_bucket(cls, date_obj: datetime.datetime) -> str:

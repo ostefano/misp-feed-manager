@@ -2,6 +2,7 @@ import abc
 import collections
 import datetime
 import json
+import logging
 import os
 import requests
 
@@ -103,6 +104,14 @@ class ObjectFactory:
             elif attr["type"] == "sha256":
                 ret["file.sha256"] = attr["value"]
         return ret
+
+
+class FeedParserException(Exception):
+    """Generic exception."""
+
+
+class EmptyFeedException(FeedParserException):
+    """Exception raised when the feed is empty."""
 
 
 class FeedParser(abc.ABC):
@@ -237,7 +246,11 @@ class AbstractFeedConsumer(abc.ABC):
     @classmethod
     def _infer_parser_class(cls, event_data: Dict) -> Type[BaseFeedParserSubType]:
         """Return the parser class able to read the feed."""
-        for object_data in event_data["Event"]["Object"]:
+        try:
+            objects_data = event_data["Event"]["Object"]
+        except KeyError:
+            raise EmptyFeedException
+        for object_data in objects_data:
             if object_data["name"] in ObjectFactory.TELEMETRY_OBJECT_NAMES:
                 return TelemetryEventFeedParser
         return IndicatorEventFeedParser
@@ -260,8 +273,8 @@ class AbstractFeedConsumer(abc.ABC):
         """Get the galaxy if the tag is a MISP galaxy cluster."""
         try:
             category = tag_name.split("=")[0]
-            tag_class, tag_galaxy = category.split(":")
-            return tag_galaxy if tag_class == "misp-galaxy" else None
+            tag_type, tag_galaxy = category.split(":")
+            return tag_galaxy if tag_type == "misp-galaxy" else None
         except (ValueError, IndexError):
             return None
 
@@ -288,12 +301,19 @@ class AbstractFeedConsumer(abc.ABC):
         """Return the items contained in the feed."""
         ret = []
         for event_data in self._get_events_since(date_object):
-            parser_class = self._infer_parser_class(event_data)
-            with parser_class(event_data) as parser:
-                for indicator in parser:
-                    if self._filter_indicator(indicator, attribute_type, galaxy_name):
-                        ret.append(indicator)
+            try:
+                parser_class = self._infer_parser_class(event_data)
+                with parser_class(event_data) as parser:
+                    for indicator in parser:
+                        if self._filter_indicator(indicator, attribute_type, galaxy_name):
+                            ret.append(indicator)
+            except EmptyFeedException:
+                self._logger.warning(f"The feed '%s' is empty", event_data['Event']['info'])
         return ret
+
+    def __init__(self):
+        """Constructor."""
+        self._logger = logging.getLogger(__name__)
 
 
 class LocalFeedConsumer(AbstractFeedConsumer):
@@ -311,6 +331,7 @@ class LocalFeedConsumer(AbstractFeedConsumer):
 
     def __init__(self, input_dir: str):
         """Constructor."""
+        super(LocalFeedConsumer, self).__init__()
         self._input_dir = input_dir
 
 
@@ -329,4 +350,5 @@ class RemoteFeedConsumer(AbstractFeedConsumer):
 
     def __init__(self, base_url: str):
         """Constructor."""
+        super(RemoteFeedConsumer, self).__init__()
         self._base_url = base_url.rstrip("/")

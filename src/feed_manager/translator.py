@@ -1,6 +1,10 @@
+import datetime
+import itertools
 import feed_manager
 
 from typing import List
+from typing import Generator
+from typing import Iterable
 from typing import Optional
 from typing import Tuple
 from typing import Union
@@ -113,7 +117,7 @@ class TagUtils:
         return any(cls.entity_contains_tag(entity, tag_name) for tag_name in tag_names)
 
     @classmethod
-    def decode_cluster_tag(
+    def get_cluster_category_and_value(
         cls,
         tag: Union[str, pymisp.MISPTag],
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -127,17 +131,134 @@ class TagUtils:
             return None, None
 
     @classmethod
+    def get_cluster_galaxy_and_value(
+        cls,
+        tag: Union[str, pymisp.MISPTag],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Decode a galaxy cluster tag into category and value."""
+        if isinstance(tag, pymisp.MISPTag):
+            tag = tag.name
+        category, value = cls.get_cluster_category_and_value(tag)
+        if category is None and value is None:
+            return None, None
+        if not category.startswith("misp-galaxy:"):
+            return None, None
+        category = category.replace("misp-galaxy:", "")
+        return category, value
+
+    @classmethod
     def get_cluster_tag_value(
         cls,
         tag: Union[str, pymisp.MISPTag],
         category: str = None,
     ) -> Optional[str]:
         """Get the value of a galaxy cluster tag optionally filtering by category."""
-        tag_category, tag_value = cls.decode_cluster_tag(tag)
+        tag_category, tag_value = cls.get_cluster_category_and_value(tag)
         if category and tag_category:
             return tag_value if tag_category.startswith(category) else None
         else:
             return tag_value
+
+    @classmethod
+    def iter_tags(cls, event: pymisp.MISPEvent) -> Generator[pymisp.MISPTag, None, None]:
+        """Iterate over all tags."""
+        for tag in event.tags:
+            yield tag
+        for entity in itertools.chain(event.objects, event.attributes):
+            try:
+                taggable_entity = cls.get_taggable_entity(entity)
+                for tag in taggable_entity.tags:
+                    yield tag
+            except ValueError:
+                pass
+
+
+class SightingUtils:
+    """Utility class to deal with sightings and timestamps."""
+
+    @classmethod
+    def timestamp_to_date(cls, timestamp: int) -> datetime.datetime:
+        """Convert a timestamp to datetime object."""
+        return datetime.datetime.utcfromtimestamp(timestamp).replace(
+            tzinfo=datetime.timezone.utc
+        )
+
+    @classmethod
+    def get_sightings_date(
+        cls, entity: Union[pymisp.MISPAttribute, pymisp.MISPObject]
+    ) -> List[datetime.datetime]:
+        """Get all sightings in datetime objects."""
+        return [
+            cls.timestamp_to_date(int(x.date_sighting))
+            for x in TagUtils.get_taggable_entity(entity).sightings
+        ]
+
+    @classmethod
+    def iter_sightings_date(
+        cls,
+        event: pymisp.MISPEvent,
+    ) -> Generator[datetime.datetime, None, None]:
+        """Iterate over all sightings."""
+        for entity in itertools.chain(event.objects, event.attributes):
+            try:
+                taggable_entity = TagUtils.get_taggable_entity(entity)
+                for sighting in cls.get_sightings_date(taggable_entity):
+                    yield sighting
+            except ValueError:
+                pass
+
+    @classmethod
+    def update_object_seen_times(
+        cls,
+        misp_object: pymisp.MISPObject,
+        date_objects: Iterable[datetime.datetime],
+    ) -> pymisp.MISPObject:
+        """Update seen times of an object given a list of date objects."""
+        update_value = False
+        first_seen = min(date_objects)
+        if not hasattr(misp_object, "first_seen"):
+            update_value = True
+        elif not misp_object.first_seen:
+            update_value = True
+        elif first_seen < misp_object.first_seen:
+            update_value = True
+        if update_value:
+            misp_object.first_seen = first_seen
+            misp_object.edited = True
+        update_value = False
+        last_seen = max(date_objects)
+        if not hasattr(misp_object, "last_seen"):
+            update_value = True
+        elif not misp_object.last_seen:
+            update_value = True
+        elif last_seen > misp_object.last_seen:
+            update_value = True
+        if update_value:
+            misp_object.last_seen = last_seen
+            misp_object.edited = True
+        return misp_object
+
+    @classmethod
+    def update_object_sightings(
+        cls,
+        misp_object: pymisp.MISPObject,
+        existing_sightings: Iterable[datetime.datetime],
+        fetched_sightings: Iterable[datetime.datetime],
+    ) -> Tuple[pymisp.MISPObject, List[pymisp.MISPSighting]]:
+        """Update all the sightings."""
+        # update first/last seen in objects
+        all_sightings = set(fetched_sightings).union(existing_sightings)
+        misp_object = cls.update_object_seen_times(misp_object, all_sightings)
+        # update sightings
+        novel_sightings = set(fetched_sightings).difference(existing_sightings)
+        novel_objects = []
+        for sighting_data in novel_sightings:
+            sighting = pymisp.MISPSighting()
+            sighting.from_dict(**{
+                "timestamp": sighting_data.timestamp(),
+            })
+            novel_objects.append(sighting)
+        return misp_object, novel_objects
 
 
 class IndicatorTranslator:
@@ -146,7 +267,6 @@ class IndicatorTranslator:
     DEFAULT_FILE_ATTRIBUTE_CATEGORY = "Payload delivery"
     DEFAULT_NET_ATTRIBUTE_CATEGORY = "Network activity"
     DEFAULT_FILE_NAME = "unknown"
-    DEFAULT_WHOIS_ENTRY = "missing"
 
     @classmethod
     def to_network_attribute(
