@@ -12,9 +12,6 @@ from typing import List
 from typing import Tuple
 
 
-DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
-
-
 def get_date_range(start_date: datetime.date, end_date: datetime.date) -> List[datetime.date]:
     """Get a range of date objects with no gaps."""
     ranges = {
@@ -33,7 +30,7 @@ def compute_statistics(indicators: List[Dict]) -> Dict[datetime.date, Tuple[int,
     date_to_attribute_uuids = collections.defaultdict(list)
     for indicator in indicators:
         attribute_uuid_to_tags[indicator["attribute_uuid"]].update(indicator["tags"])
-        date_object = datetime.datetime.strptime(indicator["timestamp"], DATETIME_FMT).date()
+        date_object = datetime.datetime.strptime(indicator["timestamp"], consumer.FeedParser.DEFAULT_FMT).date()
         date_to_attribute_uuids[date_object].append(indicator["attribute_uuid"])
     try:
         min_date = min(date_to_attribute_uuids)
@@ -109,11 +106,15 @@ def main():
         print(json.dumps(indicator, indent=True))
 
     print(f"Computing statistics")
-    statistics = compute_statistics(indicators)
-    for date_object, (nb_attributes, tag_to_count) in statistics.items():
-        print(f"{date_object} - indicators/attributes: {nb_attributes}")
-        for tag, count in sorted(tag_to_count.items()):
-            print(f"\t{tag}: {count}")
+    try:
+        statistics = compute_statistics(indicators)
+    except KeyError:
+        print("Not supported on telemetry feeds")
+    else:
+        for date_object, (nb_attributes, tag_to_count) in statistics.items():
+            print(f"{date_object} - indicators: {nb_attributes}")
+            for tag, count in sorted(tag_to_count.items()):
+                print(f"\t{tag}: {count}")
 
     return 0
 
