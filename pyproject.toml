@@ -14,6 +14,7 @@ isolated_build = True
 [testenv]
 commands=nose2
 deps=
+    ddt
     nose2
 """
 
