@@ -1,3 +1,5 @@
+***The repository has been migrated to `vmware-labs`: https://github.com/vmware-labs/feed-manager-for-misp***
+
 # MISP Feed Manager
 
 Utilities and classes to generate and consume MISP feeds.
